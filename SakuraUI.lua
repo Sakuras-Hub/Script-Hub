@@ -4634,6 +4634,54 @@ end
 return y._CreateDivider(self,aw)
 end
 
+--EXT_TAB_BEGIN
+function au:CreateSegmented(aw)
+av((aw and aw.Name)or"Segmented","Segmented")
+return y._CreateSegmented(self,aw)
+end
+
+function au:CreateProgressBar(aw)
+av((aw and aw.Name)or"Progress","ProgressBar")
+return y._CreateProgressBar(self,aw)
+end
+
+for _,methodName in ipairs({
+"CreateParagraph","CreateSlider","CreateButton","CreateToggle","CreateDropdown",
+"CreateKeybind","CreateColorPicker","CreateTextBox","CreateLabel","CreateDivider",
+"CreateSegmented","CreateProgressBar"
+})do
+local original=au[methodName]
+if original then
+au[methodName]=function(selfArg,...)
+local seen={}
+for _,child in ipairs(an.content:GetChildren())do seen[child]=true end
+local element=original(selfArg,...)
+if type(element)=="table"then
+local inst
+for _,child in ipairs(an.content:GetChildren())do
+if not seen[child]and child:IsA("GuiObject")then inst=child break end
+end
+if inst then
+if element.Instance==nil then element.Instance=inst end
+if element.SetVisible==nil then
+element.SetVisible=function(_,visible)inst.Visible=visible~=false end
+end
+if element.Destroy==nil then
+element.Destroy=function()pcall(function()inst:Destroy()end)end
+end
+end
+if element.Set==nil and type(element.SetValue)=="function"then
+element.Set=function(selfEl,value)return selfEl:SetValue(value)end
+end
+if element.Get==nil and type(element.GetValue)=="function"then
+element.Get=function(selfEl)return selfEl:GetValue()end
+end
+end
+return element
+end
+end
+end
+--EXT_TAB_END
 
 return au
 end
@@ -6072,8 +6120,362 @@ end
 }
 end
 
+--EXT_ELEMENTS_BEGIN
+function y._CreateSegmented(ak,al)
+al=al or{}
+local name=al.Name
+local label=(name and name~="")and name or nil
+local options=al.Options or{}
+local current=al.Default
+if current==nil then current=options[1]end
+local callback=al.Callback or function()end
+local flag=al.Flag
+local lib=ak._library or ak
 
+local root=F("Frame",{
+Name="Segmented_"..tostring(name or"Pills"),
+BackgroundColor3=s.Secondary,
+BackgroundTransparency=0.4,
+BorderSizePixel=0,
+Size=UDim2.new(1,0,0,u.Button.Height),
+Parent=ak.content
+})
+G(root,5)
+H(root)
 
-y.Version="1.0.2-safe"
+if label then
+F("TextLabel",{
+Name="Name",
+FontFace=v.Regular,
+TextColor3=s.Text,
+Text=label,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,10,0.5,-10),
+TextSize=w.Normal,
+Size=UDim2.new(0,120,0,20),
+Parent=root
+})
+end
+
+local track=F("Frame",{
+Name="Track",
+BackgroundColor3=s.Background,
+BackgroundTransparency=0.35,
+BorderSizePixel=0,
+AnchorPoint=label and Vector2.new(1,0.5)or Vector2.new(0.5,0.5),
+Position=label and UDim2.new(1,-6,0.5,0)or UDim2.new(0.5,0,0.5,0),
+Size=UDim2.new(0,0,0,29),
+AutomaticSize=Enum.AutomaticSize.X,
+Parent=root
+})
+G(track,7)
+H(track,s.Border,0.4)
+F("UIListLayout",{
+FillDirection=Enum.FillDirection.Horizontal,
+HorizontalAlignment=Enum.HorizontalAlignment.Center,
+VerticalAlignment=Enum.VerticalAlignment.Center,
+Padding=UDim.new(0,3),
+SortOrder=Enum.SortOrder.LayoutOrder,
+Parent=track
+})
+I(track,0,0,3,3)
+
+local pills={}
+
+local function paint(pill,active)
+E(pill,{
+BackgroundTransparency=active and 0.12 or 1,
+BackgroundColor3=active and s.Accent or s.Secondary,
+TextColor3=active and Color3.new(1,1,1)or s.TextDark
+},x.Fast)
+end
+
+local function refresh()
+for opt,pill in pairs(pills)do
+paint(pill,tostring(opt)==tostring(current))
+end
+end
+
+local api={}
+
+local function choose(opt,silent)
+current=opt
+refresh()
+if not silent then safeCall(lib,name or"Segmented",callback,current)end
+end
+
+local function build()
+for _,pill in pairs(pills)do pill:Destroy()end
+pills={}
+for index,opt in ipairs(options)do
+local active=tostring(opt)==tostring(current)
+local pill=F("TextButton",{
+Name="Pill_"..tostring(opt),
+FontFace=v.Regular,
+Text=tostring(opt),
+TextSize=w.Small,
+TextColor3=active and Color3.new(1,1,1)or s.TextDark,
+AutoButtonColor=false,
+BackgroundColor3=active and s.Accent or s.Secondary,
+BackgroundTransparency=active and 0.12 or 1,
+BorderSizePixel=0,
+Size=UDim2.new(0,0,1,-6),
+AutomaticSize=Enum.AutomaticSize.X,
+LayoutOrder=index,
+Parent=track
+})
+G(pill,5)
+I(pill,0,0,12,12)
+pill.MouseButton1Click:Connect(function()
+if tostring(opt)~=tostring(current)then choose(opt,false)end
+end)
+pill.MouseEnter:Connect(function()
+if tostring(opt)~=tostring(current)then
+E(pill,{BackgroundTransparency=0.8,TextColor3=s.Text},x.Fast)
+end
+end)
+pill.MouseLeave:Connect(function()
+paint(pill,tostring(opt)==tostring(current))
+end)
+pills[opt]=pill
+end
+end
+build()
+
+function api.SetValue(_,opt)
+for _,candidate in ipairs(options)do
+if tostring(candidate)==tostring(opt)then
+choose(candidate,false)
+return
+end
+end
+end
+function api.GetValue()return current end
+function api.SetOptions(_,newOptions,newDefault)
+options=newOptions or{}
+current=newDefault
+if current==nil then current=options[1]end
+build()
+end
+function api.SetVisible(_,visible)root.Visible=visible~=false end
+function api.Destroy()pcall(function()root:Destroy()end)end
+api.Instance=root
+
+if flag and ak._library then
+ak._library:_RegisterConfigElement(flag,"Segmented",
+function()return current end,
+function(value)api:SetValue(value)end
+)
+end
+return api
+end
+
+function y._CreateProgressBar(ak,al)
+al=al or{}
+local name=al.Name or"Progress"
+local minV=al.Min or 0
+local maxV=al.Max or 100
+local value=math.clamp(al.Default or minV,minV,maxV)
+local formatter=al.Format
+
+local root=F("Frame",{
+Name="Progress_"..name,
+BackgroundColor3=s.Secondary,
+BackgroundTransparency=0.4,
+BorderSizePixel=0,
+Size=UDim2.new(1,0,0,u.Slider.Height),
+Parent=ak.content
+})
+G(root,5)
+H(root)
+
+F("TextLabel",{
+Name="Name",
+FontFace=v.Regular,
+TextColor3=s.Text,
+Text=name,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,10,0,6),
+TextSize=w.Normal,
+Size=UDim2.new(0.6,-10,0,20),
+Parent=root
+})
+
+local valueLabel=F("TextLabel",{
+Name="Value",
+FontFace=v.Regular,
+TextColor3=s.TextDark,
+Text="",
+TextXAlignment=Enum.TextXAlignment.Right,
+BackgroundTransparency=1,
+Position=UDim2.new(0.6,0,0,6),
+TextSize=w.Small,
+Size=UDim2.new(0.4,-10,0,20),
+Parent=root
+})
+
+local barBack=F("Frame",{
+Name="BarBack",
+BackgroundColor3=s.Toggle.Disabled,
+BorderSizePixel=0,
+Position=UDim2.new(0,10,1,-14),
+Size=UDim2.new(1,-20,0,6),
+Parent=root
+})
+G(barBack,100)
+
+local fill=F("Frame",{
+Name="Fill",
+BackgroundColor3=s.Accent,
+BorderSizePixel=0,
+Size=UDim2.new(0,0,1,0),
+Parent=barBack
+})
+G(fill,100)
+
+local function ratio()
+if maxV==minV then return 0 end
+return math.clamp((value-minV)/(maxV-minV),0,1)
+end
+
+local function render(animate)
+local r=ratio()
+if animate then
+E(fill,{Size=UDim2.new(r,0,1,0)},x.Normal)
+else
+fill.Size=UDim2.new(r,0,1,0)
+end
+local text
+if type(formatter)=="function"then
+local ok,res=pcall(formatter,value,minV,maxV)
+text=ok and tostring(res)or""
+else
+text=string.format("%d%%",math.floor(r*100+0.5))
+end
+valueLabel.Text=text
+end
+render(false)
+
+local api={}
+function api.SetValue(_,newValue)
+value=math.clamp(tonumber(newValue)or value,minV,maxV)
+render(true)
+end
+function api.GetValue()return value end
+function api.SetMax(_,newMax)
+maxV=newMax
+value=math.clamp(value,minV,maxV)
+render(true)
+end
+function api.SetVisible(_,visible)root.Visible=visible~=false end
+function api.Destroy()pcall(function()root:Destroy()end)end
+api.Instance=root
+return api
+end
+--EXT_ELEMENTS_END
+
+--EXT_CORE_BEGIN
+do
+local origNew=y.new
+function y.new(title,folder)
+local opts
+if type(title)=="table"then
+opts=title
+title=opts.Title or opts.Name or"SakuraUI"
+local cs=opts.ConfigurationSaving
+folder=opts.ConfigFolder or(type(cs)=="table"and cs.FolderName)or title
+end
+local self=origNew(title,folder)
+if not self then return self end
+
+self.Flags=setmetatable({},{
+__index=function(_,k)
+local e=self._configElements and self._configElements[k]
+if e then
+local ok,v=pcall(e.getValue)
+if ok then return v end
+end
+return nil
+end,
+__newindex=function(_,k,v)
+local e=self._configElements and self._configElements[k]
+if e then pcall(e.setValue,v)end
+end
+})
+
+if opts then
+if opts.Theme then pcall(function()self:SetTheme(opts.Theme)end)end
+if opts.Accent then pcall(function()self:SetAccent(opts.Accent)end)end
+if opts.Size then pcall(function()self:Resize(opts.Size)end)end
+if opts.ToggleKey then
+local k=opts.ToggleKey
+if type(k)=="string"then k=Enum.KeyCode[k]end
+if k then pcall(function()self:SetToggleKey(k)end)end
+end
+if opts.StreamerName then pcall(function()self:SetStreamerName(opts.StreamerName)end)end
+if opts.StreamerMode~=nil then pcall(function()self:SetStreamerMode(opts.StreamerMode)end)end
+if opts.GlowIntensity then pcall(function()self:SetGlowIntensity(opts.GlowIntensity)end)end
+if opts.AutoLoadConfig then self:AutoLoad(opts.AutoLoadConfig,1.5)end
+end
+return self
+end
+
+function y:GetFlag(name)
+return self.Flags[name]
+end
+
+function y:SetFlag(name,value)
+self.Flags[name]=value
+end
+
+function y:GetFlagNames()
+local list={}
+for k in pairs(self._configElements or{})do list[#list+1]=k end
+table.sort(list)
+return list
+end
+
+function y:AutoLoad(name,delaySeconds)
+if type(name)~="string"or name==""then return end
+task.delay(delaySeconds or 0,function()
+local okf,exists=pcall(function()
+return isfile and isfile("SakuraConfigs/"..name..".json")
+end)
+if okf and exists then self:LoadConfig(name)end
+end)
+end
+
+function y:SetGlowIntensity(alpha)
+alpha=math.clamp(tonumber(alpha)or 0.86,0,1)
+self._glowTransparency=alpha
+local area=self._petalArea
+if area then
+for _,c in ipairs(area:GetChildren())do
+if c.Name=="Glow"then
+c.ImageTransparency=alpha
+elseif c.Name=="GlowDot"then
+c.ImageTransparency=math.clamp(alpha-0.1,0,1)
+end
+end
+end
+end
+
+function y:SetGlowEnabled(on)
+self._glowEnabled=on~=false
+local area=self._petalArea
+if area then
+for _,c in ipairs(area:GetChildren())do
+if c.Name=="Glow"or c.Name=="GlowDot"then
+c.Visible=self._glowEnabled
+end
+end
+end
+end
+end
+--EXT_CORE_END
+
+y.Version="1.1.1"
 
 return y
