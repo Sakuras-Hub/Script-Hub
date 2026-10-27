@@ -1907,17 +1907,18 @@ self._userMoved=true
 local ap=ao.Position-am
 local aq=an.X.Offset+ap.X
 local ar=an.Y.Offset+ap.Y
-local as=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1920,1080)
-local at,au=g:GetGuiInset()
-au=au or Vector2.zero
 local av=self.container.AbsoluteSize
-aq=math.clamp(aq,0,as.X-au.X-av.X)
-ar=math.clamp(ar,0,as.Y-au.Y-av.Y)
-self.container.Position=UDim2.new(an.X.Scale,aq,an.Y.Scale,ar)
+local sgs=self.screenGui.AbsoluteSize
+aq=math.clamp(aq,0,math.max(0,sgs.X-av.X))
+ar=math.clamp(ar,0,math.max(0,sgs.Y-av.Y))
+self.container.Position=UDim2.fromOffset(aq,ar)
 end)
 b.InputEnded:Connect(function(ao)
 if ao.UserInputType==Enum.UserInputType.Touch or ao.UserInputType==Enum.UserInputType.MouseButton1 then
+if ak then
 ak=false
+self:_FitToScreen()
+end
 end
 end)
 end
@@ -1936,6 +1937,37 @@ end
 local px=math.max(0,math.floor((sw-w)/2))
 local py=K() and 10 or math.max(0,math.floor((sh-h)/2))
 return UDim2.fromOffset(px,py)
+end
+
+function y:_FitToScreen()
+local c=self.container
+local sg=self.screenGui
+if not c or not sg then return end
+local sw,sh=sg.AbsoluteSize.X,sg.AbsoluteSize.Y
+if sw<=0 or sh<=0 then return end
+local mob=K()
+local margin=mob and 8 or 16
+local maxW=math.max(120,sw-margin*2)
+local maxH=math.max(120,sh-margin*2)
+local w=math.min(c.Size.X.Offset,maxW)
+local h=math.min(c.Size.Y.Offset,maxH)
+self._maxSize=Vector2.new(math.min(self._maxSize and self._maxSize.X or maxW,maxW),math.min(self._maxSize and self._maxSize.Y or maxH,maxH))
+self._minSize=Vector2.new(math.min(self._minSize and self._minSize.X or 300,maxW),math.min(self._minSize and self._minSize.Y or 300,maxH))
+c.Size=UDim2.fromOffset(w,h)
+local px,py
+if self._userMoved then
+local pos=c.Position
+px=math.clamp(pos.X.Offset,0,math.max(0,sw-w))
+py=math.clamp(pos.Y.Offset,0,math.max(0,sh-h))
+else
+px=math.max(0,math.floor((sw-w)/2))
+if mob then
+py=math.clamp(10,0,math.max(0,sh-h))
+else
+py=math.max(0,math.floor((sh-h)/2))
+end
+end
+c.Position=UDim2.fromOffset(px,py)
 end
 
 function y:_CenterWindow()
@@ -2071,39 +2103,19 @@ L(self.container,self.topBar)
 
 local al=d.LocalPlayer
 self.screenGui.Parent=al:WaitForChild("PlayerGui")
-self:_CenterWindow()
+self:_FitToScreen()
 task.defer(function()
-if self.container and not self._userMoved then self:_CenterWindow() end
+if self.container then self:_FitToScreen() end
 end)
-do
-local _vcam=workspace.CurrentCamera
-if _vcam and not K() then
-_vcam:GetPropertyChangedSignal("ViewportSize"):Connect(function()
-if self.container and not self._userMoved then self:_CenterWindow() end
+task.delay(0.5,function()
+if self.container then self:_FitToScreen() end
 end)
-end
-end
+self.screenGui:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+if self.container then self:_FitToScreen() end
+end)
 self._sakuraBlur=M.new(self.container)
 self:_SetupWindowDrag()
 self:_SetupMobileScroll()
--- Auto-resize on orientation change (mobile rotation).
-if K() then
-    local _cam = workspace.CurrentCamera
-    if _cam then
-        _cam:GetPropertyChangedSignal('ViewportSize'):Connect(function()
-            local vp = _cam.ViewportSize
-            local w = math.min(self.container.Size.X.Offset, vp.X - 16)
-            local h = math.min(self.container.Size.Y.Offset, vp.Y - 80)
-            if w < self._minSize.X then w = math.min(self._minSize.X, vp.X - 16) end
-            if h < self._minSize.Y then h = math.min(self._minSize.Y, vp.Y - 80) end
-            self.container.Size = UDim2.new(0, w, 0, h)
-            local pos = self.container.Position
-            local x = math.clamp(pos.X.Offset, 0, vp.X - w)
-            local y = math.clamp(pos.Y.Offset, 0, vp.Y - h)
-            self.container.Position = UDim2.new(pos.X.Scale, x, pos.Y.Scale, y)
-        end)
-    end
-end
 end
 
 function y:_CreateWindowControls()
@@ -4246,6 +4258,9 @@ E(self.container,{
 Size=UDim2.new(0,w,0,h),
 Position=target
 },x.Normal)
+task.delay(0.4,function()
+if self.container then self:_FitToScreen() end
+end)
 return true
 end
 
@@ -4296,6 +4311,14 @@ local au,av=g:GetGuiInset()
 av=av or Vector2.zero
 ar=math.min(ar,at.X-au.X-av.X-16)
 as=math.min(as,at.Y-au.Y-av.Y-80)
+end
+do
+local sgs=self.screenGui.AbsoluteSize
+local cp=self.container.Position
+if sgs.X>0 and sgs.Y>0 then
+ar=math.min(ar,math.max(120,sgs.X-cp.X.Offset))
+as=math.min(as,math.max(120,sgs.Y-cp.Y.Offset))
+end
 end
 self.container.Size=UDim2.new(0,ar,0,as)
 self._originalHeight=as
