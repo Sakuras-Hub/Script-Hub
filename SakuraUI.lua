@@ -465,6 +465,16 @@ if okT and touchEnabled and not (okK and keyboardEnabled) then
 M = true
 end
 end
+if not M then
+local okT2,touch2=pcall(function() return b.TouchEnabled end)
+local cam=workspace.CurrentCamera
+if okT2 and touch2 and cam then
+local vp=cam.ViewportSize
+if vp.X>0 and vp.X<1024 and vp.Y<768 then
+M=true
+end
+end
+end
 L=M
 return M
 end
@@ -1174,12 +1184,13 @@ function y:Notify(ak)
 local al=ak.Title or"Notification"
 local am=ak.Description or""
 local an=ai(am,ak.Duration)
+if K() and type(an)=="number" then an=math.min(an,4) end
 local ao=ah(ak.Icon)
 local ap=ak.Type or"info"
 local aq=ae[ap]or s.Notification.Timer
 
 
-if#aj>=5 then
+if#aj>=(K() and 2 or 5)then
 local ar=table.remove(aj,1)
 if ar and ar.Parent then
 ar:Destroy()
@@ -1346,6 +1357,12 @@ end
 
 if self._reopenDot then
 self._reopenDot.Visible=not self._visible
+end
+if K() and not self._visible and not self._hideHintShown then
+self._hideHintShown=true
+pcall(function()
+self:Notify({Title="UI hidden",Description="Tap the Sakura button in the bottom-left corner to bring it back.",Duration=4,Type="info"})
+end)
 end
 self:_SyncMouse()
 end
@@ -1903,8 +1920,8 @@ end)
 b.InputChanged:Connect(function(ao)
 if not ak then return end
 if ao.UserInputType~=Enum.UserInputType.Touch and ao.UserInputType~=Enum.UserInputType.MouseMovement then return end
-self._userMoved=true
 local ap=ao.Position-am
+if ap.Magnitude>3 then self._userMoved=true end
 local aq=an.X.Offset+ap.X
 local ar=an.Y.Offset+ap.Y
 local av=self.container.AbsoluteSize
@@ -2099,7 +2116,6 @@ Parent=self.container
 })
 
 self:_CreateContentArea()
-L(self.container,self.topBar)
 
 local al=d.LocalPlayer
 self.screenGui.Parent=al:WaitForChild("PlayerGui")
