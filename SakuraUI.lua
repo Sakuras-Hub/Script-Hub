@@ -779,6 +779,24 @@ Size=UDim2.new(0,220,1,-40),
 Parent=O
 })
 J(D,10,Enum.SortOrder.LayoutOrder,Enum.FillDirection.Vertical)
+-- screen-aware placement: top-right on PC, top-centre and screen-fitted on phones
+local function placeNotifications()
+if not D or not D.Parent then return end
+local sw=O.AbsoluteSize.X
+if sw<=0 then return end
+local mob=K()
+local wd=220
+if mob then wd=math.clamp(math.floor(sw*0.6),220,320)end
+wd=math.max(160,math.min(wd,sw-16))
+D.Size=UDim2.new(0,wd,1,-40)
+if mob then
+D.Position=UDim2.new(0.5,-math.floor(wd/2),0,10)
+else
+D.Position=UDim2.new(1,-wd-20,0,20)
+end
+end
+placeNotifications()
+O:GetPropertyChangedSignal("AbsoluteSize"):Connect(placeNotifications)
 return D
 end
 
@@ -1361,7 +1379,7 @@ end
 if K() and not self._visible and not self._hideHintShown then
 self._hideHintShown=true
 pcall(function()
-self:Notify({Title="UI hidden",Description="Tap the Sakura button in the bottom-left corner to bring it back.",Duration=4,Type="info"})
+self:Notify({Title="UI hidden",Description="Tap the floating Sakura button to bring it back.",Duration=4,Type="info"})
 end)
 end
 self:_SyncMouse()
@@ -1921,7 +1939,7 @@ b.InputChanged:Connect(function(ao)
 if not ak then return end
 if ao.UserInputType~=Enum.UserInputType.Touch and ao.UserInputType~=Enum.UserInputType.MouseMovement then return end
 local ap=ao.Position-am
-if ap.Magnitude>3 then self._userMoved=true end
+if ap.Magnitude>3 then self._userMoved=true self._windowCustom=true end
 local aq=an.X.Offset+ap.X
 local ar=an.Y.Offset+ap.Y
 local av=self.container.AbsoluteSize
@@ -1935,6 +1953,7 @@ if ao.UserInputType==Enum.UserInputType.Touch or ao.UserInputType==Enum.UserInpu
 if ak then
 ak=false
 self:_FitToScreen()
+if self._windowCustom then self:_QueueWindowSave() end
 end
 end
 end)
@@ -1956,6 +1975,18 @@ local py=K() and 10 or math.max(0,math.floor((sh-h)/2))
 return UDim2.fromOffset(px,py)
 end
 
+function y:_DefaultWindowSize(gw,gh)
+if K() then
+-- compact phone default (about 60% x 72% of the screen) instead of near-fullscreen
+local w=math.clamp(math.floor(gw*0.6),340,560)
+local h=math.clamp(math.floor(gh*0.72),210,360)
+return math.min(w,math.max(120,gw-16)),math.min(h,math.max(120,gh-16))
+end
+local w=math.max(300,math.min(u.Window.Width,gw-16))
+local h=math.max(300,math.min(u.Window.Height,gh-80))
+return w,h
+end
+
 function y:_FitToScreen()
 local c=self.container
 local sg=self.screenGui
@@ -1966,10 +1997,21 @@ local mob=K()
 local margin=mob and 8 or 16
 local maxW=math.max(120,sw-margin*2)
 local maxH=math.max(120,sh-margin*2)
-local w=math.min(c.Size.X.Offset,maxW)
-local h=math.min(c.Size.Y.Offset,maxH)
-self._maxSize=Vector2.new(math.min(self._maxSize and self._maxSize.X or maxW,maxW),math.min(self._maxSize and self._maxSize.Y or maxH,maxH))
-self._minSize=Vector2.new(math.min(self._minSize and self._minSize.X or 300,maxW),math.min(self._minSize and self._minSize.Y or 300,maxH))
+-- limits are rebuilt from the current screen every time, so rotating back and forth never "sticks" small
+local minW=math.min(mob and 300 or u.MinWindow.Width,maxW)
+local minH=math.min(mob and 190 or u.MinWindow.Height,maxH)
+local mxW=math.max(minW,math.min(mob and maxW or u.MaxWindow.Width,maxW))
+local mxH=math.max(minH,math.min(mob and maxH or u.MaxWindow.Height,maxH))
+self._minSize=Vector2.new(minW,minH)
+self._maxSize=Vector2.new(mxW,mxH)
+local w=math.clamp(c.Size.X.Offset,minW,mxW)
+local h
+if self.minimized then
+h=c.Size.Y.Offset
+else
+h=math.clamp(c.Size.Y.Offset,minH,mxH)
+self._originalHeight=h
+end
 c.Size=UDim2.fromOffset(w,h)
 local px,py
 if self._userMoved then
@@ -1985,6 +2027,89 @@ py=math.max(0,math.floor((sh-h)/2))
 end
 end
 c.Position=UDim2.fromOffset(px,py)
+end
+
+-- remembers size/position as fractions of the screen, separately for phone and PC
+function y:_CaptureWindow()
+if not self._windowCustom then return end
+local c=self.container
+local sg=self.screenGui
+if not c or not sg then return end
+local gw,gh=sg.AbsoluteSize.X,sg.AbsoluteSize.Y
+if gw<=0 or gh<=0 then return end
+local h=self.minimized and(self._originalHeight or c.Size.Y.Offset)or c.Size.Y.Offset
+local function r(v)return math.floor(v*10000+0.5)/10000 end
+self._savedWindow=self._savedWindow or{}
+self._savedWindow[K()and"Mobile"or"Desktop"]={
+W=r(c.Size.X.Offset/gw),
+H=r(h/gh),
+X=r(c.Position.X.Offset/gw),
+Y=r(c.Position.Y.Offset/gh),
+Moved=self._userMoved==true
+}
+end
+
+function y:_QueueWindowSave()
+if self._windowSaveQueued then return end
+self._windowSaveQueued=true
+task.delay(0.5,function()
+self._windowSaveQueued=false
+if self.container then
+pcall(function()self:_SaveUISettings()end)
+end
+end)
+end
+
+function y:_ApplySavedWindow()
+local c=self.container
+local sg=self.screenGui
+if not c or not sg or self.minimized then return end
+local gw,gh=sg.AbsoluteSize.X,sg.AbsoluteSize.Y
+if gw<=0 or gh<=0 then
+-- the GUI area isn't measured yet right after parenting: try again shortly instead of losing the saved size
+self._applyTries=(self._applyTries or 0)+1
+if self._applyTries<20 then
+task.delay(0.15,function()
+if self.container then self:_ApplySavedWindow() end
+end)
+end
+return
+end
+local sv=self._savedWindow
+local d=type(sv)=="table"and sv[K()and"Mobile"or"Desktop"]or nil
+if type(d)~="table"or type(d.W)~="number"or type(d.H)~="number"then return end
+local w=math.clamp(d.W,0.1,1)*gw
+local h=math.clamp(d.H,0.1,1)*gh
+c.Size=UDim2.fromOffset(w,h)
+if d.Moved==true and type(d.X)=="number"and type(d.Y)=="number"then
+c.Position=UDim2.fromOffset(d.X*gw,d.Y*gh)
+self._userMoved=true
+else
+self._userMoved=false
+end
+self._windowCustom=true
+self:_FitToScreen()
+end
+
+-- double-tap the resize handle (or call :ResetWindow()) to go back to the smart default size
+function y:ResetWindow()
+local sg=self.screenGui
+if not self.container or not sg or self.minimized then return false end
+local gw,gh=sg.AbsoluteSize.X,sg.AbsoluteSize.Y
+if gw<=0 or gh<=0 then return false end
+local w,h=self:_DefaultWindowSize(gw,gh)
+self._userMoved=false
+self._windowCustom=false
+if self._savedWindow then
+self._savedWindow[K()and"Mobile"or"Desktop"]=nil
+end
+self._originalHeight=h
+E(self.container,{Size=UDim2.fromOffset(w,h),Position=self:_CenteredPosition(w,h)},x.Normal)
+task.delay(0.4,function()
+if self.container then self:_FitToScreen()end
+end)
+self:_QueueWindowSave()
+return true
 end
 
 function y:_CenterWindow()
@@ -2006,26 +2131,15 @@ IgnoreGuiInset=false,
 DisplayOrder=2147483647
 })
 
-local ab=u.Window.Width
-local ac=u.Window.Height
+local ad=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
+or Vector2.new(1920,1080)
+local ae,af=g:GetGuiInset()
+af=af or Vector2.zero
+local gw,gh=ad.X-ae.X-af.X,ad.Y-ae.Y-af.Y
+local ab,ac=self:_DefaultWindowSize(gw,gh)
 if K()then
-local ad=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
-or Vector2.new(1920,1080)
-local ae,af=g:GetGuiInset()
-af=af or Vector2.zero
--- Mobile: smaller minimums and a near-fullscreen default so the GUI
--- actually fits on a phone screen instead of overflowing it.
-self._minSize=Vector2.new(math.max(240,ad.X-40),math.max(220,ad.Y-120))
-self._maxSize=Vector2.new(ad.X-16,ad.Y-80)
-ab=math.max(240,math.min(ab,ad.X-ae.X-af.X-16))
-ac=math.max(220,math.min(ac,ad.Y-ae.Y-af.Y-80))
-else
-local ad=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
-or Vector2.new(1920,1080)
-local ae,af=g:GetGuiInset()
-af=af or Vector2.zero
-ab=math.max(300,math.min(ab,ad.X-ae.X-af.X-16))
-ac=math.max(300,math.min(ac,ad.Y-ae.Y-af.Y-80))
+self._minSize=Vector2.new(math.min(300,gw-16),math.min(190,gh-16))
+self._maxSize=Vector2.new(gw-16,gh-16)
 end
 
 self.container=F("Frame",{
@@ -2225,11 +2339,27 @@ AnchorPoint=Vector2.new(0.5,0.5),
 Position=UDim2.new(1,-5,1,-5),
 Size=UDim2.new(0,62,0,60),
 BorderSizePixel=0,
+ZIndex=50,
+Parent=self.container
+})
+
+local hitSize=K()and 48 or 28
+local resizeHit=F("TextButton",{
+Name="ResizeHit",
+Text="",
+AutoButtonColor=false,
+BackgroundTransparency=1,
+AnchorPoint=Vector2.new(1,1),
+Position=UDim2.new(1,0,1,0),
+Size=UDim2.fromOffset(hitSize,hitSize),
+BorderSizePixel=0,
+ZIndex=60,
 Parent=self.container
 })
 
 self.resizeBtn=ao
-self:_SetupSmartResize(ao)
+self.resizeHit=resizeHit
+self:_SetupSmartResize(ao,resizeHit)
 end
 
 function y:_CreateReopenDot()
@@ -2533,6 +2663,7 @@ end
 
 function y:_SaveUISettings()
 if not writefile then return end
+pcall(function()self:_CaptureWindow()end)
 pcall(function()
 writefile("SakuraUISettings.json",h:JSONEncode({
 Accent={R=s.Accent.R,G=s.Accent.G,B=s.Accent.B},
@@ -2545,7 +2676,8 @@ ToggleKey=self._toggleKey and self._toggleKey.Name or"K",
 StreamerMode=self._streamerMode==true,
 StreamerName=self._streamerName or"sakruas_hub",
 StreamerRealName=self._streamerRealName,
-StreamerRealDisplay=self._streamerRealDisplay
+StreamerRealDisplay=self._streamerRealDisplay,
+Window=self._savedWindow
 }))
 end)
 end
@@ -2560,6 +2692,7 @@ self._streamerName="sakruas_hub"
 self._uiFontName="Gotham (Default)"
 self._emojisEnabled=true
 self._emojiSet="Faces"
+self._savedWindow=self._savedWindow or{}
 if not readfile or not isfile then return end
 local ak,al=pcall(function()
 if isfile("SakuraUISettings.json")then
@@ -2602,6 +2735,10 @@ self._emojisEnabled=al.Emojis==true
 end
 if ak and type(al)=="table"and type(al.EmojiSet)=="string"then
 self._emojiSet=al.EmojiSet
+end
+if ak and type(al)=="table"and type(al.Window)=="table"then
+self._savedWindow=al.Window
+pcall(function()self:_ApplySavedWindow()end)
 end
 if self._streamerMode and self.titleLabel then
 self.titleLabel.Text=self:_MaskPlayerText(self.title)
@@ -4249,12 +4386,12 @@ J(self.contentContainer,8,Enum.SortOrder.LayoutOrder)
 I(self.contentContainer,10,10,15,15)
 end
 
-function y:Resize(size)
+function y:Resize(size,silent)
 if not self.container then return false end
 local w=size and size.X.Offset or u.Window.Width
 local h=size and size.Y.Offset or u.Window.Height
-w=math.clamp(w,u.MinWindow.Width,u.MaxWindow.Width)
-h=math.clamp(h,u.MinWindow.Height,u.MaxWindow.Height)
+w=math.clamp(w,K()and 300 or u.MinWindow.Width,u.MaxWindow.Width)
+h=math.clamp(h,K()and 190 or u.MinWindow.Height,u.MaxWindow.Height)
 local cam=workspace.CurrentCamera
 if cam then
 local vp=cam.ViewportSize
@@ -4274,28 +4411,47 @@ E(self.container,{
 Size=UDim2.new(0,w,0,h),
 Position=target
 },x.Normal)
+self._originalHeight=h
+if not silent then
+self._windowCustom=true
+self:_QueueWindowSave()
+end
 task.delay(0.4,function()
 if self.container then self:_FitToScreen() end
 end)
 return true
 end
 
-function y:_SetupSmartResize(ak)
+function y:_SetupSmartResize(ak,hit)
+hit=hit or ak
 local al=false
 local am,an,ao
 
-ak.MouseEnter:Connect(function()
+hit.MouseEnter:Connect(function()
 E(ak,{ImageColor3=s.Text},x.Fast)
 end)
 
-ak.MouseLeave:Connect(function()
+hit.MouseLeave:Connect(function()
 if not al then
 E(ak,{ImageColor3=Color3.fromRGB(110,110,110)},x.Fast)
 end
 end)
 
-ak.InputBegan:Connect(function(ap)
+local activeInput
+hit.InputBegan:Connect(function(ap)
 if ap.UserInputType==Enum.UserInputType.MouseButton1 or ap.UserInputType==Enum.UserInputType.Touch then
+local now=os.clock()
+-- double tap resets the window, but only if the finger barely moved (a drag is never a reset)
+if self._lastResizeTap and now-self._lastResizeTap<0.35 and not self._resizeDidMove then
+self._lastResizeTap=nil
+al=false
+activeInput=nil
+self:ResetWindow()
+return
+end
+self._lastResizeTap=now
+self._resizeDidMove=false
+activeInput=ap
 al=true
 am=ap.Position
 an=self.container.AbsoluteSize
@@ -4310,6 +4466,10 @@ E(ak,{ImageColor3=Color3.fromRGB(110,110,110)},x.Fast)
 if aq then
 aq:Disconnect()
 end
+if self._windowCustom then
+self:_FitToScreen()
+self:_QueueWindowSave()
+end
 end
 end)
 end
@@ -4317,26 +4477,27 @@ end)
 
 B(b.InputChanged:Connect(function(ap)
 if al and(ap.UserInputType==Enum.UserInputType.MouseMovement or ap.UserInputType==Enum.UserInputType.Touch)then
+-- ignore other fingers: only the touch that grabbed the grip may resize
+if ap.UserInputType==Enum.UserInputType.Touch and activeInput and ap~=activeInput then return end
 local aq=ap.Position-am
-local ar=math.clamp(an.X+aq.X,self._minSize.X,self._maxSize.X)
-local as=math.clamp(an.Y+aq.Y,self._minSize.Y,self._maxSize.Y)
-if K()then
-local at=workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize
-or Vector2.new(1920,1080)
-local au,av=g:GetGuiInset()
-av=av or Vector2.zero
-ar=math.min(ar,at.X-au.X-av.X-16)
-as=math.min(as,at.Y-au.Y-av.Y-80)
-end
-do
+if aq.Magnitude<4 and not self._windowCustom then return end
+if aq.Magnitude>=6 then self._resizeDidMove=true end
+local minS=self._minSize or Vector2.new(300,190)
+local maxS=self._maxSize or Vector2.new(1200,800)
+local maxW,maxH=maxS.X,maxS.Y
 local sgs=self.screenGui.AbsoluteSize
 local cp=self.container.Position
 if sgs.X>0 and sgs.Y>0 then
-ar=math.min(ar,math.max(120,sgs.X-cp.X.Offset))
-as=math.min(as,math.max(120,sgs.Y-cp.Y.Offset))
+maxW=math.min(maxW,sgs.X-cp.X.Offset)
+maxH=math.min(maxH,sgs.Y-cp.Y.Offset)
 end
-end
-self.container.Size=UDim2.new(0,ar,0,as)
+maxW=math.max(maxW,minS.X)
+maxH=math.max(maxH,minS.Y)
+local ar=math.clamp(an.X+aq.X,minS.X,maxW)
+local as=math.clamp(an.Y+aq.Y,minS.Y,maxH)
+self._userMoved=true
+self._windowCustom=true
+self.container.Size=UDim2.fromOffset(ar,as)
 self._originalHeight=as
 end
 end))
@@ -4353,6 +4514,9 @@ E(self.container,{Size=UDim2.new(0,self.container.AbsoluteSize.X,0,45)},x.Slow)
 if self.resizeBtn then
 self.resizeBtn.Visible=false
 end
+if self.resizeHit then
+self.resizeHit.Visible=false
+end
 else
 if self._sakuraBlur then
 self._sakuraBlur:SetEnabled(true)
@@ -4363,6 +4527,9 @@ E(self.mainContent,{Size=UDim2.new(1,0,1,-46)},x.Normal)
 end)
 if self.resizeBtn then
 self.resizeBtn.Visible=true
+end
+if self.resizeHit then
+self.resizeHit.Visible=true
 end
 end
 end
@@ -5089,6 +5256,17 @@ local ao=al.Max or 100
 local ap=al.Default or 50
 local aq=al.Callback or function()end
 local ar=al.Flag
+local inc=tonumber(al.Increment)or 1
+if inc<=0 then inc=1 end
+local suf=al.Suffix and(" "..tostring(al.Suffix))or""
+if ao==an then ao=an+1 end
+local function snap(v)
+v=math.clamp(tonumber(v)or an,an,ao)
+v=an+math.floor((v-an)/inc+0.5)*inc
+v=math.floor(v*1000000+0.5)/1000000
+return math.clamp(v,an,ao)
+end
+ap=snap(ap)
 local as=ap
 
 local at=F("Frame",{
@@ -5112,7 +5290,7 @@ TextTruncate=Enum.TextTruncate.AtEnd,
 BackgroundTransparency=1,
 Position=UDim2.new(0,12,0,5),
 TextSize=w.Normal,
-Size=UDim2.new(1,-60,0,20),
+Size=UDim2.new(1,-125,0,20),
 Parent=at
 })
 
@@ -5120,12 +5298,12 @@ local av=F("TextLabel",{
 Name="Value",
 FontFace=v.Regular,
 TextColor3=s.Text,
-Text=tostring(as),
+Text=tostring(as)..suf,
 TextXAlignment=Enum.TextXAlignment.Right,
 BackgroundTransparency=1,
-Position=UDim2.new(1,-60,0,5),
+Position=UDim2.new(1,-110,0,5),
 TextSize=w.Normal,
-Size=UDim2.new(0,50,0,20),
+Size=UDim2.new(0,100,0,20),
 Parent=at
 })
 
@@ -5155,26 +5333,48 @@ local aB=aA.Position
 local aC=aw.AbsolutePosition
 local aD=aw.AbsoluteSize
 local aE=math.clamp((aB.X-aC.X)/aD.X,0,1)
-as=math.floor(an+(ao-an)*aE)
-E(ax,{Size=UDim2.new(aE,0,1,0)},0.05)
-av.Text=tostring(as)
+as=snap(an+(ao-an)*aE)
+E(ax,{Size=UDim2.new((as-an)/(ao-an),0,1,0)},0.05)
+av.Text=tostring(as)..suf
 end
 
 
 
+
+-- while a finger drags the slider, stop the page from scrolling under it
+local function lockScroll(lock)
+local sc=ak._library and ak._library.contentContainer
+if sc and sc:IsA("ScrollingFrame")then
+sc.ScrollingEnabled=not lock
+end
+end
 
 local function aA()
 if not ay then return end
 ay=false
+lockScroll(false)
 safeCall(ak._library or ak,am,aq,as)
 end
 
-aw.InputBegan:Connect(function(aB)
+local function beginDrag(aB)
 if aB.UserInputType==Enum.UserInputType.MouseButton1 or aB.UserInputType==Enum.UserInputType.Touch then
 ay=true
+lockScroll(true)
 az(aB)
 end
-end)
+end
+aw.InputBegan:Connect(beginDrag)
+-- generous invisible hit area under the label so thumbs can actually grab it
+local sliderHit=F("Frame",{
+Name="SliderHit",
+BackgroundTransparency=1,
+BorderSizePixel=0,
+Position=UDim2.new(0,0,0,24),
+Size=UDim2.new(1,0,1,-24),
+ZIndex=3,
+Parent=at
+})
+sliderHit.InputBegan:Connect(beginDrag)
 
 aw.InputEnded:Connect(function(aB)
 if aB.UserInputType==Enum.UserInputType.MouseButton1 or aB.UserInputType==Enum.UserInputType.Touch then
@@ -5197,10 +5397,10 @@ end))
 
 local aB={
 SetValue=function(aB,aC)
-as=math.clamp(aC,an,ao)
+as=snap(aC)
 local aD=(as-an)/(ao-an)
 ax.Size=UDim2.new(aD,0,1,0)
-av.Text=tostring(as)
+av.Text=tostring(as)..suf
 safeCall(ak._library or ak,am,aq,as)
 end,
 GetValue=function()
@@ -6006,15 +6206,23 @@ y.ActivePicker=aQ
 
 local aS=ax.AbsolutePosition
 local aT=workspace.CurrentCamera.ViewportSize
-local aU=aS.X-170
-local aV=aS.Y
-
-if aV+115>aT.Y then
-aV=aT.Y-125
+local pgui=az.Parent
+if pgui and pgui:IsA("ScreenGui")and pgui.AbsoluteSize.X>0 and pgui.AbsoluteSize.Y>0 then
+aT=pgui.AbsoluteSize
 end
-if aU<0 then
-aU=aS.X+50
+local pw=az.Size.X.Offset>0 and az.Size.X.Offset or 160
+local ph=az.Size.Y.Offset>0 and az.Size.Y.Offset or 115
+local edge=8
+-- prefer the left of the swatch, then the right, then whichever fits; always clamp inside the screen
+local aU=aS.X-pw-8
+if aU<edge then
+aU=aS.X+ax.AbsoluteSize.X+8
 end
+if aU+pw>aT.X-edge then
+aU=aT.X-pw-edge
+end
+aU=math.max(edge,aU)
+local aV=math.clamp(aS.Y-ph/2+ax.AbsoluteSize.Y/2,edge,math.max(edge,aT.Y-ph-edge))
 
 az.Position=UDim2.new(0,aU,0,aV)
 az.Visible=true
@@ -7201,7 +7409,17 @@ end
 if opts then
 if opts.Theme then pcall(function()self:SetTheme(opts.Theme)end)end
 if opts.Accent then pcall(function()self:SetAccent(opts.Accent)end)end
-if opts.Size then pcall(function()self:Resize(opts.Size)end)end
+if opts.Size and not self._windowCustom then
+pcall(function()
+local sz=opts.Size
+local sg=self.screenGui
+if K() and sg and sg.AbsoluteSize.X>0 and typeof(sz)=="UDim2" then
+local dw,dh=self:_DefaultWindowSize(sg.AbsoluteSize.X,sg.AbsoluteSize.Y)
+sz=UDim2.fromOffset(math.min(sz.X.Offset,dw),math.min(sz.Y.Offset,dh))
+end
+self:Resize(sz,true)
+end)
+end
 if opts.ToggleKey then
 local k=opts.ToggleKey
 if type(k)=="string"then k=Enum.KeyCode[k]end
@@ -7269,6 +7487,648 @@ end
 end
 --EXT_CORE_END
 
-y.Version="1.1.1"
+--EXT_RAYFIELD_BEGIN
+-- Additive layer: Rayfield-style option names, key system, loading splash,
+-- richer Notify, silent config autosave and window helpers.
+-- Nothing here replaces existing behaviour; every addition is opt-in or an alias.
+do
+local function copy(t)
+local c={}
+for k,v in pairs(t)do c[k]=v end
+return c
+end
+
+local function isMobile()
+local ok,res=pcall(K)
+if ok then return res and true or false end
+return false
+end
+
+local function guiParent()
+local lp=d.LocalPlayer
+if lp then
+local pg=lp:FindFirstChildOfClass("PlayerGui")or lp:WaitForChild("PlayerGui",5)
+if pg then return pg end
+end
+return nil
+end
+
+local function toKeyCode(v)
+if type(v)=="string"then
+local ok,k=pcall(function()return Enum.KeyCode[v]end)
+if ok then return k end
+return nil
+end
+return v
+end
+
+-- ------------------------------------------------------------------
+-- 1. Element option aliases (Rayfield names -> SakuraUI names)
+-- ------------------------------------------------------------------
+local norm={
+CreateSlider=function(o)
+if type(o.Range)=="table"then
+if o.Min==nil then o.Min=o.Range[1]end
+if o.Max==nil then o.Max=o.Range[2]end
+end
+if o.Default==nil and o.CurrentValue~=nil then o.Default=o.CurrentValue end
+end,
+CreateToggle=function(o)
+if o.Default==nil and o.CurrentValue~=nil then o.Default=o.CurrentValue end
+end,
+CreateDropdown=function(o)
+if o.MultiSelect==nil and o.MultipleOptions~=nil then o.MultiSelect=o.MultipleOptions end
+if o.Default==nil and o.CurrentOption~=nil then
+local c=o.CurrentOption
+if o.MultiSelect then
+if type(c)~="table"then c={c}end
+else
+if type(c)=="table"then c=c[1]end
+end
+o.Default=c
+end
+end,
+CreateKeybind=function(o)
+if o.Default==nil and o.CurrentKeybind~=nil then o.Default=o.CurrentKeybind end
+if type(o.Default)=="string"then o.Default=toKeyCode(o.Default)end
+end,
+CreateTextBox=function(o)
+if o.Default==nil and o.CurrentValue~=nil then o.Default=o.CurrentValue end
+if o.Placeholder==nil and o.PlaceholderText~=nil then o.Placeholder=o.PlaceholderText end
+end,
+CreateColorPicker=function(o)
+if o.Default==nil and o.Color~=nil then o.Default=o.Color end
+end,
+CreateParagraph=function(o)
+if o.Content==nil and o.Text~=nil then o.Content=o.Text end
+if o.Title==nil and o.Name~=nil then o.Title=o.Name end
+end,
+CreateButton=function(o)
+if o.Callback==nil and type(o.OnClick)=="function"then o.Callback=o.OnClick end
+end,
+}
+
+local origCreateTab=y._CreateTab
+function y._CreateTab(sec,name,icon)
+local tab=origCreateTab(sec,name,icon)
+if type(tab)~="table"then return tab end
+
+for methodName,fn in pairs(norm)do
+local orig=rawget(tab,methodName)
+if orig then
+tab[methodName]=function(selfArg,o,...)
+if type(o)~="table"then o={}end
+o=copy(o)
+fn(o)
+return orig(selfArg,o,...)
+end
+end
+end
+
+-- CreateLabel("text",icon,color) shorthand
+local origLabel=rawget(tab,"CreateLabel")
+if origLabel then
+tab.CreateLabel=function(selfArg,o,icon,color)
+if type(o)=="string"then
+o={Text=o,Icon=icon,Color=color}
+elseif type(o)~="table"then
+o={}
+else
+o=copy(o)
+end
+if o.Name==nil then o.Name=o.Text or"Label"end
+return origLabel(selfArg,o)
+end
+end
+
+-- CreateInput is Rayfield's name for a text box
+local boxFn=rawget(tab,"CreateTextBox")
+if boxFn and rawget(tab,"CreateInput")==nil then
+tab.CreateInput=function(selfArg,o,...)
+return tab.CreateTextBox(selfArg,o,...)
+end
+end
+
+return tab
+end
+
+-- ------------------------------------------------------------------
+-- 1b. Dropdown list placement: flips up / shrinks so it never leaves the screen,
+--     and gets wider on touch devices
+-- ------------------------------------------------------------------
+local origDropdown=y._CreateDropdown
+function y._CreateDropdown(tab,o,...)
+local api=origDropdown(tab,o,...)
+pcall(function()
+local content=tab.content
+local want="Dropdown_"..tostring(type(o)=="table"and o.Name or"Dropdown")
+local frame
+for _,c in ipairs(content:GetChildren())do
+if c.Name==want then frame=c end
+end
+if not frame then return end
+local list=frame:FindFirstChild("OptionsContainer")
+if not list then return end
+local function place()
+if not list.Visible then return end
+local fw=frame.AbsoluteSize.X
+local fh=frame.AbsoluteSize.Y
+local width=math.min(isMobile()and 170 or 135,math.max(100,fw-20))
+local full=list.Size.Y.Offset
+-- find the visible region (the scrolling page) and the screen
+local top,bottom=0,math.huge
+local p=frame.Parent
+while p do
+if p:IsA("ScrollingFrame")then
+top=p.AbsolutePosition.Y
+bottom=p.AbsolutePosition.Y+p.AbsoluteSize.Y
+break
+end
+p=p.Parent
+end
+local sg=frame:FindFirstAncestorOfClass("ScreenGui")
+if sg and sg.AbsoluteSize.Y>0 then
+bottom=math.min(bottom,sg.AbsolutePosition.Y+sg.AbsoluteSize.Y)
+top=math.max(top,sg.AbsolutePosition.Y)
+end
+local fy=frame.AbsolutePosition.Y
+local below=bottom-(fy+fh-1)-6
+local above=fy-top-6
+local h=full
+local y0=fh-1
+if h>below then
+if above>below then
+if h>above then h=math.max(60,above)end
+y0=-h-4
+else
+h=math.max(60,math.min(h,below))
+end
+end
+list.Size=UDim2.new(0,width,0,h)
+list.Position=UDim2.new(1,-width-10,0,y0)
+end
+list:GetPropertyChangedSignal("Visible"):Connect(place)
+end)
+return api
+end
+
+-- ------------------------------------------------------------------
+-- 2. Notify: Content/Image aliases, plain-string form, silent mode
+-- ------------------------------------------------------------------
+local origNotify=y.Notify
+function y:Notify(opts)
+if self._silentNotify then return end
+if type(opts)=="string"then opts={Title=opts}end
+if type(opts)~="table"then return end
+local o=copy(opts)
+if o.Description==nil and o.Content~=nil then o.Description=o.Content end
+if o.Icon==nil and o.Image~=nil then o.Icon=o.Image end
+if type(o.Icon)=="number"then o.Icon=tostring(o.Icon)end
+if o.Description~=nil then o.Description=tostring(o.Description)end
+if o.Title~=nil then o.Title=tostring(o.Title)end
+return origNotify(self,o)
+end
+
+-- ------------------------------------------------------------------
+-- 3. Config: silent save/load, quiet autosave, LoadConfiguration
+-- ------------------------------------------------------------------
+local origSave=y.SaveConfig
+function y:SaveConfig(name,silent)
+if silent then
+self._silentNotify=true
+local ok,res=pcall(origSave,self,name)
+self._silentNotify=false
+if ok then return res end
+return false
+end
+return origSave(self,name)
+end
+
+local origLoad=y.LoadConfig
+function y:LoadConfig(name,silent)
+if silent then
+self._silentNotify=true
+local ok,res=pcall(origLoad,self,name)
+self._silentNotify=false
+if ok then return res end
+return false
+end
+return origLoad(self,name)
+end
+
+function y:SetAutoSave(on)
+self._autoSave=on and true or false
+if self._autoSaveThread then
+pcall(task.cancel,self._autoSaveThread)
+self._autoSaveThread=nil
+end
+if self._autoSave then
+self._autoSaveThread=task.spawn(function()
+while self._autoSave and self.screenGui and self.screenGui.Parent do
+task.wait(30)
+if self._autoSave and self._currentConfig then
+self:SaveConfig(self._currentConfig,true)
+end
+end
+end)
+end
+end
+
+function y:LoadConfiguration(name)
+name=name or self._rfConfigFile or self._currentConfig
+if type(name)~="string"or name==""then return false end
+local okf,exists=pcall(function()
+return isfile and isfile("SakuraConfigs/"..name..".json")
+end)
+if okf and exists then
+return self:LoadConfig(name,true)
+end
+return false
+end
+
+-- ------------------------------------------------------------------
+-- 4. Window helpers
+-- ------------------------------------------------------------------
+function y:IsVisible()
+return self._visible~=false
+end
+
+function y:SetVisibility(visible)
+local want=visible~=false
+if(self._visible~=false)~=want then
+self:Toggle()
+end
+end
+
+function y:ModifyTheme(theme)
+if type(theme)=="string"then
+return self:SetTheme(theme)
+end
+if type(theme)=="table"then
+local acc=theme.Accent or theme.SliderProgress or theme.ToggleEnabled
+if typeof(acc)=="Color3"then
+pcall(function()self:SetAccent(acc)end)
+end
+if type(theme.Name)=="string"then
+pcall(function()self:SetTheme(theme.Name)end)
+end
+end
+end
+
+-- Window:CreateTab(name,icon) without having to make a section first
+function y:CreateTab(name,icon)
+if not self._rfSection then
+self._rfSection=self:CreateSection(self._rfSectionName or"Menu")
+end
+return self._rfSection:CreateTab(name,icon)
+end
+
+-- ------------------------------------------------------------------
+-- 5. Key system and loading splash (both opt-in via y.new options)
+-- ------------------------------------------------------------------
+local function ensureFolder()
+pcall(function()
+if makefolder and isfolder and not isfolder("SakuraConfigs")then
+makefolder("SakuraConfigs")
+end
+end)
+end
+
+local function runKeySystem(ks,title)
+ks=type(ks)=="table"and ks or{}
+local keys={}
+local rawKeys=ks.Key
+if type(rawKeys)=="string"then rawKeys={rawKeys}end
+if type(rawKeys)~="table"then rawKeys={}end
+for _,k in ipairs(rawKeys)do
+local val=tostring(k)
+if ks.GrabKeyFromSite then
+local ok,res=pcall(function()return game:HttpGet(val)end)
+if ok and type(res)=="string"then
+val=res:gsub("[\r\n%s]","")
+end
+end
+keys[#keys+1]=val
+end
+local function valid(input)
+input=tostring(input or""):gsub("^%s+",""):gsub("%s+$","")
+for _,k in ipairs(keys)do
+if input==k then return true end
+end
+return false
+end
+
+local fileName="SakuraConfigs/"..tostring(ks.FileName or"SakuraKey")..".key"
+local saveKey=ks.SaveKey~=false
+if saveKey then
+local ok,saved=pcall(function()
+if isfile and readfile and isfile(fileName)then return readfile(fileName)end
+return nil
+end)
+if ok and saved and valid(saved)then return true end
+end
+
+local parent=guiParent()
+if not parent then return true end
+
+local mobile=isMobile()
+local gui=Instance.new("ScreenGui")
+gui.Name="SakuraKeySystem"
+gui.ResetOnSpawn=false
+gui.IgnoreGuiInset=true
+gui.DisplayOrder=1000
+gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+gui.Parent=parent
+
+local dim=F("Frame",{
+Name="Dim",
+BackgroundColor3=Color3.new(0,0,0),
+BackgroundTransparency=0.45,
+BorderSizePixel=0,
+Size=UDim2.new(1,0,1,0),
+Parent=gui
+})
+
+local card=F("Frame",{
+Name="Card",
+AnchorPoint=Vector2.new(0.5,0.5),
+Position=UDim2.new(0.5,0,mobile and 0.34 or 0.5,0),
+Size=UDim2.new(0,380,0,230),
+BackgroundColor3=s.Background or s.Secondary,
+BorderSizePixel=0,
+Parent=dim
+})
+G(card,12)
+H(card,s.Border,1)
+F("UISizeConstraint",{MaxSize=Vector2.new(380,400),MinSize=Vector2.new(240,200),Parent=card})
+-- shrink on narrow screens (phones) so the card never overflows
+local cam=workspace.CurrentCamera
+if cam and cam.ViewportSize.X<404 then
+card.Size=UDim2.new(1,-24,0,230)
+end
+
+F("TextLabel",{
+Name="Title",
+FontFace=v.Bold,
+Text=tostring(ks.Title or title or"Key System"),
+TextColor3=s.Text,
+TextSize=w.Title+4,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,18,0,14),
+Size=UDim2.new(1,-60,0,24),
+Parent=card
+})
+F("TextLabel",{
+Name="Subtitle",
+FontFace=v.Regular,
+Text=tostring(ks.Subtitle or"Enter your key to continue"),
+TextColor3=s.TextDark,
+TextSize=w.Small,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,18,0,40),
+Size=UDim2.new(1,-36,0,18),
+Parent=card
+})
+local note=F("TextLabel",{
+Name="Note",
+FontFace=v.Regular,
+Text=tostring(ks.Note or""),
+TextColor3=s.TextDark,
+TextSize=w.Tiny+1,
+TextWrapped=true,
+TextXAlignment=Enum.TextXAlignment.Left,
+TextYAlignment=Enum.TextYAlignment.Top,
+BackgroundTransparency=1,
+Position=UDim2.new(0,18,0,62),
+Size=UDim2.new(1,-36,0,36),
+Parent=card
+})
+
+local boxFrame=F("Frame",{
+Name="BoxFrame",
+BackgroundColor3=s.Secondary,
+BackgroundTransparency=0.3,
+BorderSizePixel=0,
+Position=UDim2.new(0,18,0,106),
+Size=UDim2.new(1,-36,0,40),
+Parent=card
+})
+G(boxFrame,8)
+local boxStroke=H(boxFrame,s.Border,1)
+local box=F("TextBox",{
+Name="Input",
+FontFace=v.Regular,
+Text="",
+PlaceholderText="Key...",
+PlaceholderColor3=s.TextDark,
+TextColor3=s.Text,
+TextSize=w.Normal,
+ClearTextOnFocus=false,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,12,0,0),
+Size=UDim2.new(1,-24,1,0),
+Parent=boxFrame
+})
+
+local status=F("TextLabel",{
+Name="Status",
+FontFace=v.Regular,
+Text="",
+TextColor3=Color3.fromRGB(235,90,110),
+TextSize=w.Tiny+1,
+TextXAlignment=Enum.TextXAlignment.Left,
+BackgroundTransparency=1,
+Position=UDim2.new(0,18,0,150),
+Size=UDim2.new(1,-36,0,14),
+Parent=card
+})
+
+local submit=F("TextButton",{
+Name="Submit",
+FontFace=v.Bold,
+Text="Submit",
+TextColor3=Color3.new(1,1,1),
+TextSize=w.Normal,
+AutoButtonColor=false,
+BackgroundColor3=s.Accent,
+BorderSizePixel=0,
+Position=UDim2.new(0,18,1,-54),
+Size=UDim2.new(1,-36,0,40),
+Parent=card
+})
+G(submit,8)
+
+local close=F("TextButton",{
+Name="Close",
+FontFace=v.Bold,
+Text="X",
+TextColor3=s.TextDark,
+TextSize=w.Normal,
+BackgroundTransparency=1,
+Position=UDim2.new(1,-40,0,10),
+Size=UDim2.new(0,30,0,30),
+Parent=card
+})
+
+local done,result=false,false
+local attempts=0
+local function trySubmit()
+local input=box.Text
+if valid(input)then
+if saveKey then
+ensureFolder()
+pcall(function()
+if writefile then writefile(fileName,tostring(input))end
+end)
+end
+result=true
+done=true
+else
+attempts=attempts+1
+status.Text="Invalid key"..(ks.MaxAttempts and(" ("..attempts.."/"..ks.MaxAttempts..")")or"")
+E(boxStroke,{Color=Color3.fromRGB(235,90,110)},0.15)
+task.delay(0.8,function()
+if boxStroke.Parent then E(boxStroke,{Color=s.Border},0.3)end
+end)
+if ks.MaxAttempts and attempts>=ks.MaxAttempts then done=true end
+end
+end
+
+submit.Activated:Connect(trySubmit)
+box.FocusLost:Connect(function(enter)
+if enter then trySubmit()end
+end)
+close.Activated:Connect(function()done=true end)
+
+while not done and gui.Parent do
+task.wait(0.1)
+end
+pcall(function()gui:Destroy()end)
+return result
+end
+
+local function runSplash(opts)
+local parent=guiParent()
+if not parent then return end
+local mobile=isMobile()
+local gui=Instance.new("ScreenGui")
+gui.Name="SakuraSplash"
+gui.ResetOnSpawn=false
+gui.IgnoreGuiInset=true
+gui.DisplayOrder=999
+gui.Parent=parent
+
+local card=F("Frame",{
+AnchorPoint=Vector2.new(0.5,0.5),
+Position=UDim2.new(0.5,0,0.5,0),
+Size=UDim2.new(0,mobile and 260 or 320,0,110),
+BackgroundColor3=s.Background or s.Secondary,
+BackgroundTransparency=1,
+BorderSizePixel=0,
+Parent=gui
+})
+G(card,12)
+local stroke=H(card,s.Border,1)
+stroke.Transparency=1
+local t1=F("TextLabel",{
+FontFace=v.Bold,
+Text=tostring(opts.LoadingTitle or opts.Title or opts.Name or"SakuraUI"),
+TextColor3=s.Text,
+TextTransparency=1,
+TextSize=w.Title+6,
+BackgroundTransparency=1,
+Position=UDim2.new(0,0,0,18),
+Size=UDim2.new(1,0,0,28),
+Parent=card
+})
+local t2=F("TextLabel",{
+FontFace=v.Regular,
+Text=tostring(opts.LoadingSubtitle or""),
+TextColor3=s.TextDark,
+TextTransparency=1,
+TextSize=w.Small,
+BackgroundTransparency=1,
+Position=UDim2.new(0,0,0,48),
+Size=UDim2.new(1,0,0,18),
+Parent=card
+})
+local barBg=F("Frame",{
+BackgroundColor3=s.Secondary,
+BorderSizePixel=0,
+BackgroundTransparency=1,
+Position=UDim2.new(0,24,1,-26),
+Size=UDim2.new(1,-48,0,4),
+Parent=card
+})
+G(barBg,100)
+local bar=F("Frame",{
+BackgroundColor3=s.Accent,
+BorderSizePixel=0,
+Size=UDim2.new(0,0,1,0),
+Parent=barBg
+})
+G(bar,100)
+
+E(card,{BackgroundTransparency=0.05},0.25)
+E(stroke,{Transparency=0},0.25)
+E(t1,{TextTransparency=0},0.25)
+E(t2,{TextTransparency=0},0.25)
+E(barBg,{BackgroundTransparency=0.3},0.25)
+local dur=tonumber(opts.LoadingDuration)or 1.4
+E(bar,{Size=UDim2.new(1,0,1,0)},dur,Enum.EasingStyle.Quad)
+task.wait(dur+0.1)
+E(card,{BackgroundTransparency=1},0.25)
+E(stroke,{Transparency=1},0.25)
+E(t1,{TextTransparency=1},0.25)
+E(t2,{TextTransparency=1},0.25)
+E(barBg,{BackgroundTransparency=1},0.25)
+E(bar,{BackgroundTransparency=1},0.25)
+task.wait(0.3)
+pcall(function()gui:Destroy()end)
+end
+
+-- ------------------------------------------------------------------
+-- 6. y.new wrapper: KeySystem, splash, ConfigurationSaving.FileName
+-- ------------------------------------------------------------------
+local prevNew=y.new
+function y.new(title,folder)
+local opts=type(title)=="table"and title or nil
+if opts then
+if opts.KeySystem then
+local ok,passed=pcall(runKeySystem,opts.KeySettings,opts.Title or opts.Name or"SakuraUI")
+if ok and not passed then return nil end
+end
+if opts.LoadingTitle then
+pcall(runSplash,opts)
+end
+end
+
+local self=prevNew(title,folder)
+if not self or not opts then return self end
+
+if opts.SectionName then self._rfSectionName=opts.SectionName end
+
+local cs=opts.ConfigurationSaving
+if type(cs)=="table"and cs.Enabled~=false and type(cs.FileName)=="string"and cs.FileName~=""then
+self._rfConfigFile=cs.FileName
+self._currentConfig=cs.FileName
+if cs.AutoSave~=false then self:SetAutoSave(true)end
+task.delay(1.5,function()
+if self.screenGui and self.screenGui.Parent then
+pcall(function()self:LoadConfiguration(cs.FileName)end)
+end
+end)
+end
+return self
+end
+
+y.Version="1.2.0"
+end
+--EXT_RAYFIELD_END
+
+y.Version="1.2.0"
 
 return y
